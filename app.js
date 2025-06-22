@@ -84,117 +84,97 @@ async function saveAttendanceToFirebase(date, records) {
   }
 }
 
-async function loadStudentsFromFirebase() {
-  if (!db) return;
-  
-  try {
-    const { ref, get } = window.firebaseApp.databaseFunctions;
-    const snapshot = await get(studentsRef);
-    
-    if (snapshot.exists()) {
-      const studentsData = snapshot.val();
-      allStudents = [];
-      
-      // Convert object to array and add firebaseId
-      Object.keys(studentsData).forEach(key => {
-        const student = studentsData[key];
-        student.firebaseId = key;
-        allStudents.push(student);
-      });
-      
-      console.log(`Loaded ${allStudents.length} students from Firebase`);
-      
-      // Update class filter options
-      updateClassFilterOptions();
-      
-      // Filter and display students
-      filterStudents();
-      
-      // Update UI
-      updateAttendanceSummary();
-      populateStudentTable();
-      populateStudentNamesList();
-    } else {
-      console.log("No students found in database, using sample data");
-    }
-  } catch (error) {
-    console.error("Error loading students from Firebase:", error);
-  }
-}
+// Function to load students from Firebase moved to a central location
 
 async function loadAttendanceFromFirebase() {
-  if (!db) return;
+  console.log("Attempting to load attendance data from Firebase");
+  
+  if (!db || !window.firebaseApp || !window.firebaseApp.databaseFunctions) {
+    console.error("Firebase database not initialized properly");
+    showNotification("Error loading attendance data. Using empty dataset.", "warning");
+    return;
+  }
   
   try {
+    console.log("Fetching attendance data from Firebase path: 'attendance'");
     const { ref, get } = window.firebaseApp.databaseFunctions;
+    const attendanceRef = ref(db, 'attendance');
     const snapshot = await get(attendanceRef);
     
-    if (snapshot.exists()) {
+    if (snapshot && snapshot.exists && snapshot.exists()) {
       const attendanceData = snapshot.val();
+      console.log("Attendance data received:", attendanceData);
       attendanceRecords = {};
       
       // Convert Firebase format to app format
       Object.keys(attendanceData).forEach(dateKey => {
-        // Convert dateKey (YYYYMMDD) to YYYY-MM-DD format
-        const year = dateKey.substring(0, 4);
-        const month = dateKey.substring(4, 6);
-        const day = dateKey.substring(6, 8);
-        const formattedDate = `${year}-${month}-${day}`;
-        
-        attendanceRecords[formattedDate] = attendanceData[dateKey];
+        try {
+          // Convert dateKey (YYYYMMDD) to YYYY-MM-DD format
+          const year = dateKey.substring(0, 4);
+          const month = dateKey.substring(4, 6);
+          const day = dateKey.substring(6, 8);
+          const formattedDate = `${year}-${month}-${day}`;
+          
+          attendanceRecords[formattedDate] = attendanceData[dateKey];
+        } catch (err) {
+          console.warn(`Error processing date key ${dateKey}:`, err);
+        }
       });
       
-      console.log(`Loaded attendance records for ${Object.keys(attendanceRecords).length} dates from Firebase`);
-      
-      // Update UI
-      updateAttendanceSummary();
+      console.log(`Successfully loaded attendance records for ${Object.keys(attendanceRecords).length} dates from Firebase`);
     } else {
-      console.log("No attendance records found in database");
+      console.log("No attendance records found in database, using empty dataset");
+      attendanceRecords = {};
     }
   } catch (error) {
-    console.error("Error loading attendance from Firebase:", error);
+    console.error("Error loading attendance data:", error);
+    console.error("Error details:", error.message);
+    showNotification("Error loading attendance data. Using empty dataset.", "warning");
+    attendanceRecords = {};
   }
+  
+  // Always update UI regardless of success or failure
+  updateAttendanceSummary();
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
   console.log("DOMContentLoaded - Initializing app");
   
-  // Wait for Firebase to be initialized
-  let firebaseReady = false;
-  let attempts = 0;
-  const maxAttempts = 50; // 5 seconds max wait
-  
-  while (!firebaseReady && attempts < maxAttempts) {
-    if (window.firebaseApp) {
-      firebaseReady = true;
-      console.log("Firebase is ready");
-      break;
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-    attempts++;
-  }
-  
-  if (!firebaseReady) {
-    console.warn("Firebase not available, continuing with mock implementation");
-  }
-
   try {
-    // Initialize Firebase with global firebaseApp object
-    if (window.firebaseApp) {
-      if (window.firebaseApp.isConnected) {
+    // Wait for Firebase to be initialized
+    let firebaseReady = false;
+    let attempts = 0;
+    const maxAttempts = 50; // 5 seconds max wait
+    
+    console.log("Waiting for Firebase to initialize...");
+    while (!firebaseReady && attempts < maxAttempts) {
+      if (window.firebaseApp) {
+        firebaseReady = true;
+        console.log("Firebase is ready");
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+    
+    if (!firebaseReady) {
+      console.warn("Firebase not available after waiting, continuing with local implementation");
+      showNotification("Firebase not available. Using local data storage.", "warning");
+      db = null;
+    } else {
+      // Initialize Firebase with global firebaseApp object
+      console.log("Setting up Firebase database references");
+      if (window.firebaseApp && window.firebaseApp.db) {
         db = window.firebaseApp.db;
         const { ref } = window.firebaseApp.databaseFunctions;
         studentsRef = ref(db, 'students');
         attendanceRef = ref(db, 'attendance');
         console.log("Connected to Firebase database");
       } else {
-        console.log("Using mock Firebase database");
-        db = window.firebaseApp.getDatabase();
+        console.warn("Firebase app exists but database is not available");
+        showNotification("Firebase database not available. Using local data.", "warning");
+        db = null;
       }
-    } else {
-      console.error("FirebaseApp not found, creating fallback");
-      // Create a simple fallback
-      db = null;
     }
     
     // Initialize date picker with today's date
@@ -231,21 +211,40 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     document.getElementById("exportBtn").addEventListener("click", exportCSV);
     document.getElementById("importStudentsBtn").addEventListener("click", () => document.getElementById("csvFileInput").click());
-    document.getElementById("csvFileInput").addEventListener("change", importStudentsFromCSV);
-    document.getElementById("studentSearch").addEventListener("input", filterStudents);
-    document.getElementById("classFilter").addEventListener("change", filterStudents);
-    
-    // Add toggle student list button event listener
-    document.getElementById("toggleStudentListBtn").addEventListener("click", function() {
-      const studentListContainer = document.getElementById("studentListContainer");
-      if (studentListContainer.style.display === "none") {
-        studentListContainer.style.display = "block";
-        this.innerHTML = '<i class="fas fa-eye-slash me-1"></i> Hide';
-      } else {
-        studentListContainer.style.display = "none";
-        this.innerHTML = '<i class="fas fa-eye me-1"></i> Show';
-      }
-    });
+    document.getElementById("csvFileInput").addEventListener("change", importStudentsFromCSV);    document.getElementById("studentSearch").addEventListener("input", filterStudents);
+    document.getElementById("classFilter").addEventListener("change", filterStudents);    // Add toggle student list button event listener
+    const toggleBtn = document.getElementById("toggleStudentListBtn");
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", function() {
+        console.log("Toggle button clicked");
+        const studentListContainer = document.getElementById("studentListContainer");
+        if (!studentListContainer) {
+          console.error("Student list container element not found");
+          return;
+        }
+        
+        // Use getComputedStyle instead of inline style check for better reliability
+        const currentDisplay = window.getComputedStyle(studentListContainer).display;
+        console.log("Current display state:", currentDisplay);
+        
+        if (currentDisplay === "none") {
+          // Make sure the list is populated before showing
+          populateStudentNamesList();
+          
+          // Show the container
+          studentListContainer.style.display = "block";
+          this.innerHTML = '<i class="fas fa-eye-slash me-1"></i> Hide Students';
+          console.log("Showing student list container");
+        } else {
+          // Hide the container
+          studentListContainer.style.display = "none";
+          this.innerHTML = '<i class="fas fa-eye me-1"></i> Show Students';
+          console.log("Hiding student list container");
+        }
+      });
+    } else {
+      console.error("Toggle button element not found");
+    }
     
     // Initialize default students if none exist
     if (allStudents.length === 0) {
@@ -255,9 +254,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         { name: 'Charlie Brown', id: 'S003', class: 'ClassB' },
       ];
     }
-    
-    // Add sample students
+      // Add sample students
     addSampleStudents();
+    
+    // Pre-populate the student names list (even though it's hidden initially)
+    populateStudentNamesList();
     
     // Populate class filter dropdown with available classes
     populateClassFilter();
@@ -1009,44 +1010,105 @@ async function saveStudentsToFirebase() {
 }
 
 async function loadAttendanceFromFirebase() {
-  if (db) {
-    try {
-      const dbRef = window.firebaseApp.ref(db);
-      const snapshot = await window.firebaseApp.get(window.firebaseApp.child(dbRef, 'attendanceRecords'));
-      
-      if (snapshot.exists()) {
-        attendanceRecords = snapshot.val() || {};
-        console.log("Attendance data loaded from Firebase");
-      } else {
-        console.log("No attendance data found in Firebase");
-      }
-    } catch (error) {
-      console.error("Error loading attendance data:", error);
-      showNotification("Error loading attendance data. Using empty dataset.", "warning");
-    }
-  } else {
-    console.error("Firebase database not initialized");
+  console.log("Attempting to load attendance data from Firebase");
+  
+  if (!db || !window.firebaseApp || !window.firebaseApp.databaseFunctions) {
+    console.error("Firebase database not initialized properly");
+    showNotification("Error loading attendance data. Using empty dataset.", "warning");
+    return;
   }
+  
+  try {
+    console.log("Fetching attendance data from Firebase path: 'attendance'");
+    const { ref, get } = window.firebaseApp.databaseFunctions;
+    const attendanceRef = ref(db, 'attendance');
+    const snapshot = await get(attendanceRef);
+    
+    if (snapshot && snapshot.exists && snapshot.exists()) {
+      const attendanceData = snapshot.val();
+      console.log("Attendance data received:", attendanceData);
+      attendanceRecords = {};
+      
+      // Convert Firebase format to app format
+      Object.keys(attendanceData).forEach(dateKey => {
+        try {
+          // Convert dateKey (YYYYMMDD) to YYYY-MM-DD format
+          const year = dateKey.substring(0, 4);
+          const month = dateKey.substring(4, 6);
+          const day = dateKey.substring(6, 8);
+          const formattedDate = `${year}-${month}-${day}`;
+          
+          attendanceRecords[formattedDate] = attendanceData[dateKey];
+        } catch (err) {
+          console.warn(`Error processing date key ${dateKey}:`, err);
+        }
+      });
+      
+      console.log(`Successfully loaded attendance records for ${Object.keys(attendanceRecords).length} dates from Firebase`);
+    } else {
+      console.log("No attendance records found in database, using empty dataset");
+      attendanceRecords = {};
+    }
+  } catch (error) {
+    console.error("Error loading attendance data:", error);
+    console.error("Error details:", error.message);
+    showNotification("Error loading attendance data. Using empty dataset.", "warning");
+    attendanceRecords = {};
+  }
+  
+  // Always update UI regardless of success or failure
+  updateAttendanceSummary();
 }
 
 async function loadStudentsFromFirebase() {
-  if (db) {
-    try {
-      const dbRef = window.firebaseApp.ref(db);
-      const snapshot = await window.firebaseApp.get(window.firebaseApp.child(dbRef, 'students'));
+  console.log("Attempting to load student data from Firebase");
+  
+  if (!db || !window.firebaseApp || !window.firebaseApp.databaseFunctions) {
+    console.error("Firebase database not initialized properly");
+    showNotification("Error loading student data. Using sample data instead.", "warning");
+    addSampleStudents();
+    return;
+  }
+  
+  try {
+    console.log("Fetching student data from Firebase path: 'students'");
+    const { ref, get } = window.firebaseApp.databaseFunctions;
+    const studentsRef = ref(db, 'students');
+    const snapshot = await get(studentsRef);
+    
+    if (snapshot && snapshot.exists && snapshot.exists()) {
+      const studentsData = snapshot.val();
+      console.log("Student data received:", studentsData);
+      allStudents = [];
       
-      if (snapshot.exists()) {
-        allStudents = snapshot.val() || [];
-        console.log("Student data loaded from Firebase");
-      } else {
-        console.log("No student data found in Firebase");
-      }
-    } catch (error) {
-      console.error("Error loading student data:", error);
-      showNotification("Error loading student data. Using default students.", "warning");
+      // Convert object to array and add firebaseId
+      Object.keys(studentsData).forEach(key => {
+        const student = studentsData[key];
+        student.firebaseId = key;
+        allStudents.push(student);
+      });
+      
+      console.log(`Successfully loaded ${allStudents.length} students from Firebase`);
+      
+      // Update class filter options
+      updateClassFilterOptions();
+      
+      // Filter and display students
+      filterStudents();
+      
+      // Update UI
+      updateAttendanceSummary();
+      populateStudentTable();
+      populateStudentNamesList();
+    } else {
+      console.log("No students found in database, adding sample students");
+      addSampleStudents();
     }
-  } else {
-    console.error("Firebase database not initialized");
+  } catch (error) {
+    console.error("Error loading student data:", error);
+    console.error("Error details:", error.message);
+    showNotification("Error loading student data. Using sample students instead.", "warning");
+    addSampleStudents();
   }
 }
 
@@ -1068,6 +1130,7 @@ window.markAttendance = markAttendance;
 
 // Populate the student names list in the UI
 function populateStudentNamesList() {
+  console.log("Populating student names list...");
   const studentNamesList = document.getElementById('studentNamesList');
   if (!studentNamesList) {
     console.warn("Student names list container not found");
@@ -1077,31 +1140,82 @@ function populateStudentNamesList() {
   // Clear existing content
   studentNamesList.innerHTML = '';
   
-  // Add each student to the list
-  allStudents.forEach(student => {
+  if (!allStudents || allStudents.length === 0) {
+    // Show a message if there are no students
+    studentNamesList.innerHTML = `
+      <div class="col-12 text-center py-4">
+        <i class="fas fa-user-slash fs-3 text-muted mb-3"></i>
+        <p class="text-muted">No students found. Add students using the "Add Student" button.</p>
+      </div>
+    `;
+    
+    // Update the student count badge
+    const studentCount = document.getElementById('studentCount');
+    if (studentCount) {
+      studentCount.textContent = "0 students";
+    }
+    
+    return;
+  }
+  
+  // Add each student to the list with animation
+  allStudents.forEach((student, index) => {
     // Create container for student item
     const studentItem = document.createElement('div');
     studentItem.className = 'col-md-4 col-sm-6 mb-2';
     
     // Create the student name item with avatar
-    const nameInitial = student.name.charAt(0).toUpperCase();
+    const nameInitial = student.name ? student.name.charAt(0).toUpperCase() : '?';
+    
+    // Get a different color based on the student's index for visual variety
+    const colors = ['#4361ee', '#3a0ca3', '#7209b7', '#f72585', '#4cc9f0', '#4895ef'];
+    const backgroundColor = colors[index % colors.length];
     
     studentItem.innerHTML = `
-      <div class="student-name-item">
-        <div class="student-name-avatar">${nameInitial}</div>
-        <span class="student-list-name">${student.name}</span>
-        <small class="student-list-id">#${student.id}</small>
-        <span class="student-list-class">${student.class}</span>
+      <div class="student-name-item" style="animation-delay: ${index * 0.05}s">
+        <div class="student-name-avatar" style="background-color: ${backgroundColor}">${nameInitial}</div>
+        <span class="student-list-name">${student.name || 'Unnamed Student'}</span>
+        <small class="student-list-id">#${student.id || 'N/A'}</small>
+        <span class="student-list-class">${student.class || 'No Class'}</span>
       </div>
     `;
     
     studentNamesList.appendChild(studentItem);
   });
-  
   console.log(`Populated student names list with ${allStudents.length} students`);
+  
+  // Update the student count badge
+  const studentCount = document.getElementById('studentCount');
+  if (studentCount) {
+    studentCount.textContent = `${allStudents.length} student${allStudents.length !== 1 ? 's' : ''}`;
+  }
+  
+  // Add a CSS animation to the items
+  const styleId = 'student-name-animation-style';
+  let style = document.getElementById(styleId);
+  
+  if (!style) {
+    style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      .student-name-item {
+        opacity: 0;
+        transform: translateY(10px);
+        animation: fadeSlideIn 0.3s forwards;
+        animation-delay: calc(var(--index) * 0.05s);
+      }
+      @keyframes fadeSlideIn {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }
 }
 
-// Function to handle direct add student button click from HTML
+// Function to handle direct add student button from HTML
 function directAddStudent() {
   // Call the addNewStudent function
   addNewStudent();
@@ -1135,8 +1249,18 @@ function generateStudentId() {
 
 // Add sample student data if none exists
 function addSampleStudents() {
-  if (allStudents.length === 0) {
+  console.log("Checking if sample students need to be added. Current count:", allStudents ? allStudents.length : 0);
+  
+  // Ensure allStudents is always an array
+  if (!allStudents) {
+    allStudents = [];
+  }
+  
+  if (allStudents.length === 0 || allStudents.length < 3) {
     console.log("Adding sample students");
+    
+    // Store original students to avoid duplicates
+    const originalStudents = [...allStudents];
     
     const sampleStudents = [
       { name: 'John Smith', id: 'S1001', class: 'ClassA' },
@@ -1153,24 +1277,61 @@ function addSampleStudents() {
       { name: 'Emma White', id: 'S1012', class: 'ClassC' }
     ];
     
-    // Add sample students to the array
-    allStudents = [...sampleStudents];
+    // Filter out any sample students that might be duplicates
+    const filteredSampleStudents = sampleStudents.filter(sample => 
+      !originalStudents.some(existing => existing.name === sample.name)
+    );
+    
+    console.log(`Adding ${filteredSampleStudents.length} new sample students`);
+    
+    // Add filtered sample students to the array
+    allStudents = [...originalStudents, ...filteredSampleStudents];
     
     // Save to Firebase if available
-    if (db) {
-      sampleStudents.forEach(async (student) => {
-        await saveStudentToFirebase(student);
+    if (db && window.firebaseApp && window.firebaseApp.databaseFunctions) {
+      console.log("Saving sample students to Firebase");
+      filteredSampleStudents.forEach(async (student) => {
+        try {
+          await saveStudentToFirebase(student);
+        } catch (error) {
+          console.error("Error saving sample student to Firebase:", error);
+        }
       });
+    } else {
+      console.log("Firebase not available, skipping saving sample students to database");
     }
     
     // Update UI
-    updateClassFilterOptions();
-    filterStudents();
-    updateAttendanceSummary();
-    populateStudentTable();
-    populateStudentNamesList();
-    
-    console.log("Sample students added successfully");
+    try {
+      // Update the toggle button text to "Show Students" since we've added new data
+      const toggleBtn = document.getElementById("toggleStudentListBtn");
+      if (toggleBtn) {
+        toggleBtn.innerHTML = '<i class="fas fa-eye me-1"></i> Show Students';
+      }
+      
+      if (typeof updateClassFilterOptions === 'function') {
+        updateClassFilterOptions();
+      }
+      if (typeof filterStudents === 'function') {
+        filterStudents();
+      }
+      if (typeof updateAttendanceSummary === 'function') {
+        updateAttendanceSummary();
+      }
+      if (typeof populateStudentTable === 'function') {
+        populateStudentTable();
+      }
+      if (typeof populateStudentNamesList === 'function') {
+        populateStudentNamesList();
+      }
+      
+      showNotification("Sample students added successfully", "success");
+      console.log("Sample students added successfully. New count:", allStudents.length);
+    } catch (error) {
+      console.error("Error updating UI after adding sample students:", error);
+    }
+  } else {
+    console.log("Using existing students, no need to add samples");
   }
 }
 

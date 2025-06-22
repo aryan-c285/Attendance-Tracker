@@ -1,6 +1,6 @@
 // Firebase configuration file
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.1.0/firebase-app.js';
-import { getDatabase, ref, set, get, push, update, remove, onValue } from 'https://www.gstatic.com/firebasejs/10.1.0/firebase-database.js';
+import { getDatabase, ref, set, get, push, update, remove, onValue, child } from 'https://www.gstatic.com/firebasejs/10.1.0/firebase-database.js';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -14,15 +14,35 @@ const firebaseConfig = {
   measurementId: "G-C0SQNW988H"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const database = getDatabase(app);
+// Initialize Firebase with error handling
+let app, database;
+
+try {
+  console.log("Initializing Firebase...");
+  app = initializeApp(firebaseConfig);
+  database = getDatabase(app);
+  console.log("Firebase initialized successfully");
+  
+  // Test database connection
+  const testRef = ref(database, '.info/connected');
+  onValue(testRef, (snapshot) => {
+    const connected = snapshot.val();
+    console.log("Firebase connection state:", connected ? "connected" : "disconnected");
+    if (window.firebaseApp) {
+      window.firebaseApp.isConnected = !!connected;
+    }
+  });
+} catch (error) {
+  console.error("Failed to initialize Firebase:", error);
+  app = null;
+  database = null;
+}
 
 // Create global firebaseApp object for access in other files
 window.firebaseApp = {
   app: app,
   db: database,
-  isConnected: true,
+  isConnected: !!database,
   getDatabase: () => database,
   databaseFunctions: {
     ref,
@@ -31,7 +51,8 @@ window.firebaseApp = {
     push,
     update,
     remove,
-    onValue
+    onValue,
+    child
   }
 };
 
