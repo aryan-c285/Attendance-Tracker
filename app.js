@@ -6,6 +6,10 @@ let attendanceRecords = {}; // { date: [{ name, status }] }
 let allStudents = []; // Array to store all students
 let filteredStudents = []; // For search and filter functionality
 
+// Firebase references
+let studentsRef;
+let attendanceRef;
+
 // Add a helper function to ensure elements are updated when available
 function updateElementTextContent(elementId, text) {
   const element = document.getElementById(elementId);
@@ -13,6 +17,142 @@ function updateElementTextContent(elementId, text) {
     element.textContent = text;
   } else {
     console.warn(`Element with ID '${elementId}' not found`);
+  }
+}
+
+// Firebase helper functions
+async function saveStudentToFirebase(student) {
+  if (!db) return null;
+  
+  try {
+    const { ref, push } = window.firebaseApp.databaseFunctions;
+    const newStudentRef = push(studentsRef);
+    const studentId = newStudentRef.key;
+    
+    student.firebaseId = studentId;
+    
+    await window.firebaseApp.databaseFunctions.set(newStudentRef, student);
+    console.log(`Student ${student.name} saved to Firebase with ID: ${studentId}`);
+    return studentId;
+  } catch (error) {
+    console.error("Error saving student to Firebase:", error);
+    return null;
+  }
+}
+
+async function updateStudentInFirebase(student) {
+  if (!db || !student.firebaseId) return false;
+  
+  try {
+    const { ref, update } = window.firebaseApp.databaseFunctions;
+    const studentRef = ref(db, `students/${student.firebaseId}`);
+    await update(studentRef, student);
+    console.log(`Student ${student.name} updated in Firebase`);
+    return true;
+  } catch (error) {
+    console.error("Error updating student in Firebase:", error);
+    return false;
+  }
+}
+
+async function removeStudentFromFirebase(studentId) {
+  if (!db) return false;
+  
+  try {
+    const { ref, remove } = window.firebaseApp.databaseFunctions;
+    await remove(ref(db, `students/${studentId}`));
+    console.log(`Student with ID: ${studentId} removed from Firebase`);
+    return true;
+  } catch (error) {
+    console.error("Error removing student from Firebase:", error);
+    return false;
+  }
+}
+
+async function saveAttendanceToFirebase(date, records) {
+  if (!db) return false;
+  
+  try {
+    const { ref, set } = window.firebaseApp.databaseFunctions;
+    const formattedDate = date.replace(/-/g, '');
+    await set(ref(db, `attendance/${formattedDate}`), records);
+    console.log(`Attendance for ${date} saved to Firebase`);
+    return true;
+  } catch (error) {
+    console.error("Error saving attendance to Firebase:", error);
+    return false;
+  }
+}
+
+async function loadStudentsFromFirebase() {
+  if (!db) return;
+  
+  try {
+    const { ref, get } = window.firebaseApp.databaseFunctions;
+    const snapshot = await get(studentsRef);
+    
+    if (snapshot.exists()) {
+      const studentsData = snapshot.val();
+      allStudents = [];
+      
+      // Convert object to array and add firebaseId
+      Object.keys(studentsData).forEach(key => {
+        const student = studentsData[key];
+        student.firebaseId = key;
+        allStudents.push(student);
+      });
+      
+      console.log(`Loaded ${allStudents.length} students from Firebase`);
+      
+      // Update class filter options
+      updateClassFilterOptions();
+      
+      // Filter and display students
+      filterStudents();
+      
+      // Update UI
+      updateAttendanceSummary();
+      populateStudentTable();
+      populateStudentNamesList();
+    } else {
+      console.log("No students found in database, using sample data");
+    }
+  } catch (error) {
+    console.error("Error loading students from Firebase:", error);
+  }
+}
+
+async function loadAttendanceFromFirebase() {
+  if (!db) return;
+  
+  try {
+    const { ref, get } = window.firebaseApp.databaseFunctions;
+    const snapshot = await get(attendanceRef);
+    
+    if (snapshot.exists()) {
+      const attendanceData = snapshot.val();
+      attendanceRecords = {};
+      
+      // Convert Firebase format to app format
+      Object.keys(attendanceData).forEach(dateKey => {
+        // Convert dateKey (YYYYMMDD) to YYYY-MM-DD format
+        const year = dateKey.substring(0, 4);
+        const month = dateKey.substring(4, 6);
+        const day = dateKey.substring(6, 8);
+        const formattedDate = `${year}-${month}-${day}`;
+        
+        attendanceRecords[formattedDate] = attendanceData[dateKey];
+      });
+      
+      console.log(`Loaded attendance records for ${Object.keys(attendanceRecords).length} dates from Firebase`);
+      
+      // Update UI
+      updateAttendanceSummary();
+    } else {
+      console.log("No attendance records found in database");
+    }
+  } catch (error) {
+    console.error("Error loading attendance from Firebase:", error);
   }
 }
 
@@ -43,6 +183,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (window.firebaseApp) {
       if (window.firebaseApp.isConnected) {
         db = window.firebaseApp.db;
+        const { ref } = window.firebaseApp.databaseFunctions;
+        studentsRef = ref(db, 'students');
+        attendanceRef = ref(db, 'attendance');
         console.log("Connected to Firebase database");
       } else {
         console.log("Using mock Firebase database");
@@ -92,19 +235,29 @@ document.addEventListener('DOMContentLoaded', async function() {
     document.getElementById("studentSearch").addEventListener("input", filterStudents);
     document.getElementById("classFilter").addEventListener("change", filterStudents);
     
+    // Add toggle student list button event listener
+    document.getElementById("toggleStudentListBtn").addEventListener("click", function() {
+      const studentListContainer = document.getElementById("studentListContainer");
+      if (studentListContainer.style.display === "none") {
+        studentListContainer.style.display = "block";
+        this.innerHTML = '<i class="fas fa-eye-slash me-1"></i> Hide';
+      } else {
+        studentListContainer.style.display = "none";
+        this.innerHTML = '<i class="fas fa-eye me-1"></i> Show';
+      }
+    });
+    
     // Initialize default students if none exist
     if (allStudents.length === 0) {
       allStudents = [
         { name: 'Alice Johnson', id: 'S001', class: 'ClassA' },
         { name: 'Bob Smith', id: 'S002', class: 'ClassA' },
         { name: 'Charlie Brown', id: 'S003', class: 'ClassB' },
-        { name: 'David Garcia', id: 'S004', class: 'ClassB' },
-        { name: 'Emma Wilson', id: 'S005', class: 'ClassC' }
       ];
-      await saveStudentsToFirebase();
     }
     
-    console.log("Students loaded:", allStudents.length);
+    // Add sample students
+    addSampleStudents();
     
     // Populate class filter dropdown with available classes
     populateClassFilter();
@@ -140,73 +293,61 @@ document.addEventListener('DOMContentLoaded', async function() {
   }
 });
 
-// Notification function to show user messages
-function showNotification(message, type = 'info') {
-  console.log(`${type.toUpperCase()}: ${message}`);
-  
-  // Try to find an existing notification container
-  let container = document.getElementById('notification-container');
-  
+// Notification system
+function showNotification(message, type = 'success', duration = 3000) {
+  // Create notification container if it doesn't exist
+  let container = document.querySelector('.notification-container');
   if (!container) {
-    // Create notification container if it doesn't exist
     container = document.createElement('div');
-    container.id = 'notification-container';
-    container.style.cssText = `
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      z-index: 9999;
-      pointer-events: none;
-    `;
+    container.className = 'notification-container';
     document.body.appendChild(container);
   }
   
-  // Create notification element
-  const notification = document.createElement('div');
-  notification.className = `alert alert-${type} alert-dismissible fade show notification-toast`;
-  notification.style.cssText = `
-    margin-bottom: 10px;
-    pointer-events: auto;
-    min-width: 300px;
-    opacity: 0;
-    transform: translateX(100%);
-    transition: all 0.3s ease;
+  // Create notification toast
+  const toast = document.createElement('div');
+  toast.className = `notification-toast toast show alert alert-${type}`;
+  toast.innerHTML = `
+    <div class="toast-body">
+      <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'warning' ? 'fa-exclamation-triangle' : 'fa-info-circle'} me-2"></i>
+      ${message}
+    </div>
   `;
   
-  // Create icon based on type
-  let icon = 'fa-info-circle';
-  switch(type) {
-    case 'success': icon = 'fa-check-circle'; break;
-    case 'warning': icon = 'fa-exclamation-triangle'; break;
-    case 'danger': icon = 'fa-times-circle'; break;
+  // Add to container
+  container.appendChild(toast);
+  
+  // Auto remove after duration
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// Loading indicator functions
+function showLoading(message = 'Loading...') {
+  let loader = document.querySelector('.loading-indicator');
+  if (!loader) {
+    loader = document.createElement('div');
+    loader.className = 'loading-indicator';
+    loader.innerHTML = `
+      <div class="spinner-border text-primary me-2" role="status">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+      <span id="loadingMessage">${message}</span>
+    `;
+    document.body.appendChild(loader);
+  } else {
+    document.getElementById('loadingMessage').textContent = message;
   }
   
-  notification.innerHTML = `
-    <i class="fas ${icon} me-2"></i>
-    ${message}
-    <button type="button" class="btn-close" onclick="this.parentElement.remove()"></button>
-  `;
-  
-  container.appendChild(notification);
-  
-  // Animate in
-  setTimeout(() => {
-    notification.style.opacity = '1';
-    notification.style.transform = 'translateX(0)';
-  }, 100);
-  
-  // Auto remove after 5 seconds
-  setTimeout(() => {
-    if (notification.parentElement) {
-      notification.style.opacity = '0';
-      notification.style.transform = 'translateX(100%)';
-      setTimeout(() => {
-        if (notification.parentElement) {
-          notification.remove();
-        }
-      }, 300);
-    }
-  }, 5000);
+  loader.classList.add('show');
+}
+
+function hideLoading() {
+  const loader = document.querySelector('.loading-indicator');
+  if (loader) {
+    loader.classList.remove('show');
+  }
 }
 
 // Function to update filter count
@@ -526,6 +667,41 @@ function populateClassFilter() {
   });
 }
 
+// Update class filter options based on available classes
+function updateClassFilterOptions() {
+  const classFilter = document.getElementById('classFilter');
+  if (!classFilter) {
+    console.warn("Class filter element not found");
+    return;
+  }
+  
+  // Save current selection
+  const currentSelection = classFilter.value;
+  
+  // Clear current options except "All Classes"
+  while (classFilter.options.length > 1) {
+    classFilter.remove(1);
+  }
+  
+  // Get unique classes from all students
+  const classes = [...new Set(allStudents.map(student => student.class))].filter(Boolean);
+  
+  // Add options for each class
+  classes.forEach(className => {
+    const option = document.createElement('option');
+    option.value = className;
+    option.textContent = className;
+    classFilter.appendChild(option);
+  });
+  
+  // Restore previous selection if it still exists
+  if (currentSelection && Array.from(classFilter.options).some(option => option.value === currentSelection)) {
+    classFilter.value = currentSelection;
+  }
+  
+  console.log(`Updated class filter with ${classes.length} classes`);
+}
+
 function importStudentsFromCSV(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -627,38 +803,101 @@ function importStudentsFromCSV(event) {
   reader.readAsText(file);
 }
 
-function addNewStudent() {
-  const name = document.getElementById('newStudentName').value.trim();
-  const id = document.getElementById('newStudentId').value.trim();
-  const className = document.getElementById('newStudentClass').value;
-
-  if (!name) {
-    showNotification('Student name is required', 'danger');
-    return;
+// Mark student attendance function
+async function markAttendance(studentName, status) {
+  const date = document.getElementById("datePicker").value;
+  
+  // Initialize the date entry if it doesn't exist
+  if (!attendanceRecords[date]) {
+    attendanceRecords[date] = [];
   }
-
-  // Prevent duplicate names
-  if (allStudents.some(s => s.name === name)) {
-    showNotification('Student already exists', 'warning');
-    return;
+  
+  // Check if student already has attendance for this date
+  const existingRecord = attendanceRecords[date].find(record => record.name === studentName);
+  
+  if (existingRecord) {
+    // Update existing record
+    existingRecord.status = status;
+    console.log(`Updated ${studentName}'s attendance to ${status} on ${date}`);
+  } else {
+    // Add new record
+    attendanceRecords[date].push({ name: studentName, status: status });
+    console.log(`Marked ${studentName} as ${status} on ${date}`);
   }
-
-  allStudents.push({ name, id, class: className });
-  saveStudentsToFirebase();
-  populateStudentTable();
+  
+  // Save to Firebase
+  if (db) {
+    await saveAttendanceToFirebase(date, attendanceRecords[date]);
+  }
+  
+  // Update UI
   updateAttendanceSummary();
-  updateFilterCount();
-  showNotification('Student added successfully', 'success');
+  populateStudentTable();
+  
+  // Show notification
+  showNotification(`${studentName} marked as ${status}`);
+}
 
-  // Close the modal after adding
-  const modalElement = document.getElementById('addStudentModal');
-  if (modalElement && typeof bootstrap !== 'undefined') {
-    const modal = bootstrap.Modal.getOrCreateInstance(modalElement);
-    modal.hide();
+// Add new student function
+async function addNewStudent() {
+  console.log("addNewStudent function called");
+  
+  const name = document.getElementById("newStudentName").value.trim();
+  const id = document.getElementById("newStudentId").value.trim() || generateStudentId();
+  const studentClass = document.getElementById("newStudentClass").value;
+  
+  console.log("Student data:", { name, id, class: studentClass });
+  
+  if (!name) {
+    showNotification("Student name is required", "warning");
+    return;
   }
-
-  // Reset form
-  document.getElementById('addStudentForm').reset();
+  
+  // Check for duplicate name
+  if (allStudents.some(student => student.name.toLowerCase() === name.toLowerCase())) {
+    showNotification("A student with this name already exists", "warning");
+    return;
+  }
+  
+  const newStudent = { name, id, class: studentClass };
+  console.log("New student object:", newStudent);
+  
+  // Save to Firebase and get ID
+  if (db) {
+    const firebaseId = await saveStudentToFirebase(newStudent);
+    if (firebaseId) {
+      newStudent.firebaseId = firebaseId;
+    }
+  }
+  
+  // Add to local array
+  allStudents.push(newStudent);
+  console.log("Student added to allStudents array. New count:", allStudents.length);
+  
+  // Update UI
+  updateClassFilterOptions();
+  filterStudents();
+  updateAttendanceSummary();
+  populateStudentTable();
+  populateStudentNamesList();
+  
+  // Reset form and close modal
+  document.getElementById("newStudentName").value = "";
+  document.getElementById("newStudentId").value = "";
+  
+  // Use Bootstrap method to close modal
+  const modal = bootstrap.Modal.getInstance(document.getElementById('addStudentModal'));
+  if (modal) {
+    modal.hide();
+  } else {
+    console.warn("Modal instance not found, trying alternate approach");
+    // Alternative approach to close the modal
+    const modalElement = document.getElementById('addStudentModal');
+    const bsModal = new bootstrap.Modal(modalElement);
+    bsModal.hide();
+  }
+  
+  showNotification(`Student ${name} added successfully`);
 }
 
 function showTeacherView() {
@@ -824,6 +1063,116 @@ window.importStudentsFromCSV = importStudentsFromCSV;
 window.filterStudents = filterStudents;
 window.showStudentAttendanceModal = showStudentAttendanceModal;
 window.addNewStudent = addNewStudent;
+window.directAddStudent = directAddStudent; // Add directAddStudent to global scope
+window.markAttendance = markAttendance;
+
+// Populate the student names list in the UI
+function populateStudentNamesList() {
+  const studentNamesList = document.getElementById('studentNamesList');
+  if (!studentNamesList) {
+    console.warn("Student names list container not found");
+    return;
+  }
+  
+  // Clear existing content
+  studentNamesList.innerHTML = '';
+  
+  // Add each student to the list
+  allStudents.forEach(student => {
+    // Create container for student item
+    const studentItem = document.createElement('div');
+    studentItem.className = 'col-md-4 col-sm-6 mb-2';
+    
+    // Create the student name item with avatar
+    const nameInitial = student.name.charAt(0).toUpperCase();
+    
+    studentItem.innerHTML = `
+      <div class="student-name-item">
+        <div class="student-name-avatar">${nameInitial}</div>
+        <span class="student-list-name">${student.name}</span>
+        <small class="student-list-id">#${student.id}</small>
+        <span class="student-list-class">${student.class}</span>
+      </div>
+    `;
+    
+    studentNamesList.appendChild(studentItem);
+  });
+  
+  console.log(`Populated student names list with ${allStudents.length} students`);
+}
+
+// Function to handle direct add student button click from HTML
+function directAddStudent() {
+  // Call the addNewStudent function
+  addNewStudent();
+}
+
+// Helper function to generate a student ID
+function generateStudentId() {
+  // Get the current year
+  const year = new Date().getFullYear().toString().substring(2);
+  // Get the current highest student ID number
+  let highestId = 0;
+  
+  allStudents.forEach(student => {
+    if (student.id && student.id.startsWith('S')) {
+      const idNumber = parseInt(student.id.substring(1));
+      if (!isNaN(idNumber) && idNumber > highestId) {
+        highestId = idNumber;
+      }
+    }
+  });
+  
+  // Increment the highest ID
+  const newIdNumber = highestId + 1;
+  
+  // Format the ID with leading zeros (e.g., S001, S012, S123)
+  const idFormatted = 'S' + newIdNumber.toString().padStart(3, '0');
+  
+  console.log(`Generated new student ID: ${idFormatted}`);
+  return idFormatted;
+}
+
+// Add sample student data if none exists
+function addSampleStudents() {
+  if (allStudents.length === 0) {
+    console.log("Adding sample students");
+    
+    const sampleStudents = [
+      { name: 'John Smith', id: 'S1001', class: 'ClassA' },
+      { name: 'Emily Johnson', id: 'S1002', class: 'ClassA' },
+      { name: 'Michael Brown', id: 'S1003', class: 'ClassA' },
+      { name: 'Jessica Davis', id: 'S1004', class: 'ClassB' },
+      { name: 'David Wilson', id: 'S1005', class: 'ClassB' },
+      { name: 'Sarah Miller', id: 'S1006', class: 'ClassB' },
+      { name: 'Daniel Martinez', id: 'S1007', class: 'ClassC' },
+      { name: 'Olivia Taylor', id: 'S1008', class: 'ClassC' },
+      { name: 'James Anderson', id: 'S1009', class: 'ClassC' },
+      { name: 'Sophia Thomas', id: 'S1010', class: 'ClassA' },
+      { name: 'Matthew Jackson', id: 'S1011', class: 'ClassB' },
+      { name: 'Emma White', id: 'S1012', class: 'ClassC' }
+    ];
+    
+    // Add sample students to the array
+    allStudents = [...sampleStudents];
+    
+    // Save to Firebase if available
+    if (db) {
+      sampleStudents.forEach(async (student) => {
+        await saveStudentToFirebase(student);
+      });
+    }
+    
+    // Update UI
+    updateClassFilterOptions();
+    filterStudents();
+    updateAttendanceSummary();
+    populateStudentTable();
+    populateStudentNamesList();
+    
+    console.log("Sample students added successfully");
+  }
+}
 
 // Statistics Dashboard Functions
 function updateStatisticsDashboard() {
